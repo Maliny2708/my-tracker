@@ -3,9 +3,7 @@ import requests
 
 st.set_page_config(page_title="Personal Calorie Engine", layout="centered")
 st.title("🍲 Personal Recipe & Batch Tracker")
-
-# Your active API Ninjas Key
-API_KEY = "3rJ5okv3gZXIkJZuZQ8Cxof7tuViayTC7yox3wJg"
+st.caption("Powered by kalori-api.my 🇲🇾")
 
 # Initialize tracking arrays with default fields
 if 'ingredients' not in st.session_state:
@@ -14,58 +12,71 @@ if 'ingredients' not in st.session_state:
 dish_name = st.text_input("Dish Name:", value="Chicken Curry")
 st.markdown("### Ingredients Input:")
 
-# You can now use capitalizations or custom words here
+# Dropdown options matching your workflow rules
 unit_options = ["grams", "KG", "quantity", "tsp", "tbsp", "ml", "L"]
 total_batch_calories = 0.0
 
-# Render our rows
+# Render our rows line-by-line
 for i, ing in enumerate(st.session_state.ingredients):
     col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
     
     with col1:
-        ing['item'] = st.text_input(f"Item #{i+1}", value=ing['item'], key=f"item_{i}")
+        ing['item'] = st.text_input(f"Item #{i+1}", value=ing['item'], placeholder="e.g., Chicken, Potato", key=f"item_{i}")
     with col2:
         ing['value'] = st.number_input("Weight/Qty", min_value=0.0, value=ing['value'], step=0.1, key=f"val_{i}")
     with col3:
         ing['unit'] = st.selectbox("Unit", options=unit_options, index=unit_options.index(ing['unit']), key=f"unit_{i}")
     
     api_calories = 0.0
+    api_status_msg = ""
     
-    # Only fire network request if you actually filled something out
     if ing['item'].strip() and ing['value'] > 0:
+        # 1. Clean query string to match Malaysian DB lookup values
+        search_term = ing['item'].strip().lower()
         
-        # --- SMART DATA TRANSFORMATION ARRAY LAYER ---
-        # This converts your user-friendly inputs into exactly what the API database demands
-        api_unit = ing['unit']
-        if api_unit == "KG":
-            api_unit = "kg"
-        elif api_unit == "grams":
-            api_unit = "g"
-        elif api_unit == "quantity":
-            api_unit = ""  # Leaves it blank so it reads as a raw number e.g. "6 potato"
-            
-        search_query = f"{ing['value']} {api_unit} {ing['item']}".strip()
-        # -----------------------------------------------
-        
-        api_url = f"https://api.api-ninjas.com/v1/nutrition?query={search_query}"
+        # 2. Free open public endpoint route
+        api_url = f"https://api.kalori-api.my/api/v1/foods/search?query={search_term}"
         
         try:
-            response = requests.get(api_url, headers={'X-Api-Key': API_KEY})
+            response = requests.get(api_url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
-                api_calories = sum([item.get('calories', 0.0) for item in data])
+                if isinstance(data, list) and len(data) > 0:
+                    # Target the first matching database match array element
+                    matched_food = data[0]
+                    # Get calories per 100g (the baseline format for the Malaysian DB)
+                    cal_per_100g = float(matched_food.get('calories', 0.0))
+                    
+                    # 3. Handle conversion logic from user inputs dynamically
+                    if ing['unit'] == "KG":
+                        # 1.5 KG = 1500g -> Multiplies cal_per_100g by 15
+                        api_calories = (ing['value'] * 1000 / 100) * cal_per_100g
+                    elif ing['unit'] == "grams" or ing['unit'] == "ml":
+                        api_calories = (ing['value'] / 100) * cal_per_100g
+                    elif ing['unit'] == "L":
+                        api_calories = (ing['value'] * 1000 / 100) * cal_per_100g
+                    else:
+                        # Baseline fallback multiplier if it's a raw generic count/quantity item
+                        # Assumes a single item unit portion size averages around 100-150 grams
+                        api_calories = ing['value'] * cal_per_100g
+                else:
+                    api_status_msg = "Not found"
+            else:
+                api_status_msg = f"Err {response.status_code}"
         except:
-            api_calories = 0.0
+            api_status_msg = "Conn Err"
 
     with col4:
-        # If the API hits, it auto-fills. If it returns 0, you can edit it manually.
+        # If the API hits successfully, use that value. Else, preserve user override entries.
         if api_calories > 0:
             current_val = float(api_calories)
         else:
             current_val = float(ing['manual_cal'])
             
+        label_text = f"Calorie ({api_status_msg})" if api_status_msg else "Calorie (kcal)"
+        
         ing['manual_cal'] = st.number_input(
-            "Calorie (kcal)", 
+            label_text, 
             min_value=0.0, 
             value=current_val, 
             step=1.0, 
